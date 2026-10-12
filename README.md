@@ -13,9 +13,9 @@ Printed QR codes stand for places in my life. Hold the **transport** code betwee
 | `phone` | 🏠 **Home** — Jersey City, NJ |
 | `notebook` | 🎨 **SVA** — 136 W 21st St, New York |
 | `bottle` | 🛒 **ShopRite** — Luis Marin Blvd & 6th St, Jersey City |
-| `object-b` | 💪 **GNC** — Newport Centre, Jersey City |
+| `object-b` | 💊 **GNC** — Newport Centre, Jersey City |
 | `object-a` | 🧭 **Transport** — connects the two place codes closest to it. The one further **left** on screen is the start. |
-| `object-c` | **Preference** — each appearance cycles ⚡ Fastest → 💵 Cheapest → 🌱 Greenest, and the recommendation updates. |
+| `object-c` | **Preference** — each appearance cycles ✨ Recommended → ⚡ Fastest → 💵 Cheapest → 🌱 Greenest. **Recommended** (the default) walks when walking takes 20 min or less, takes the PATH when there is one, and otherwise picks the fastest option (`WALK_FIRST_MAX_MINUTES` in `config.js`). |
 
 For every connected pair the card lists transit 🚇, drive 🚗, bike 🚲 and walk 🚶 with time, rough cost and CO₂. Walks over 45 min and bike rides over 60 min are shown greyed out and never recommended.
 
@@ -55,5 +55,5 @@ npx netlify-cli deploy --prod --dir=.
 
 - `index.html` — page shell, loads the webcam video element and jsQR from a CDN
 - `config.js` — QR → place mapping, addresses, API key, cost/CO₂ estimates
-- `script.js` — QR detection (tiled scanning for multiple codes per frame), routing and drawing
+- `script.js` — QR detection, routing, pop-up and voice. Detection scans a downscaled frame, re-checks known codes in a small window every frame, and spreads the full search for new codes over 3 frames (about 4× faster than scanning every tile every frame).
 - `style.css` — minimal layout for the fullscreen video + canvas overlay

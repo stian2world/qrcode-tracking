@@ -59,7 +59,7 @@ const PLACES = {
   gnc: {
     label: 'GNC',
     sub: 'Newport',
-    icon: '💪',
+    icon: '💊',
     color: '#c58bff',
     address: 'GNC, Newport Centre, Jersey City, NJ',
     lat: 40.7274,
@@ -152,6 +152,10 @@ const CO2_KG_PER_MILE = {
   WALK: 0,
   BICYCLE: 0,
 };
+
+// "Recommended" walks whenever walking takes this long or less; otherwise it
+// takes the train (PATH) if there is one, otherwise the fastest option.
+const WALK_FIRST_MAX_MINUTES = 20;
 
 // Walking or biking longer than this isn't a realistic suggestion.
 const MAX_MINUTES = {

@@ -42,6 +42,7 @@ const MODE_INFO = {
 };
 
 const PREFERENCES = [
+  { key: 'recommended', icon: '✨', label: 'Recommended' },
   { key: 'fastest', icon: '⚡', label: 'Fastest' },
   { key: 'cheapest', icon: '💵', label: 'Cheapest' },
   { key: 'greenest', icon: '🌱', label: 'Greenest' },
@@ -151,10 +152,7 @@ video.addEventListener('loadedmetadata', () => {
   overlay.width = video.videoWidth;
   overlay.height = video.videoHeight;
 
-  sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = video.videoWidth;
-  sampleCanvas.height = video.videoHeight;
-  sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  setUpScanner(video.videoWidth, video.videoHeight);
 
   if (!ticking) {
     ticking = true;
@@ -164,17 +162,16 @@ video.addEventListener('loadedmetadata', () => {
 
 function tick() {
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
-    sampleCtx.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
     const now = performance.now();
 
-    for (const qr of scanForQRCodes()) {
+    for (const qr of scanForQRCodes(now)) {
       const center = centerOf(qr.location);
       // The video is shown mirrored (like a mirror), so flip x to match
       // what you see — your left is the screen's left.
       if (MIRROR_VIDEO) {
         center.x = overlay.width - center.x;
       }
-      seen.set(qr.data, { qr, center, lastSeen: now });
+      seen.set(qr.data, { qr, center, raw: qr.raw, lastSeen: now });
     }
     const visible = visibleByRole(now);
 
@@ -467,7 +464,20 @@ function recommend(results) {
     return null;
   }
   const preference = PREFERENCES[preferenceIndex].key;
+
+  // "Recommended": walk when it's close, take the train when there is one,
+  // otherwise whatever is fastest.
+  if (preference === 'recommended') {
+    const walk = options.find((r) => r.mode === 'WALK' && r.minutes <= WALK_FIRST_MAX_MINUTES);
+    const transit = options.find((r) => r.mode === 'TRANSIT');
+    const pick = walk || transit;
+    if (pick) {
+      return pick;
+    }
+  }
+
   const score = {
+    recommended: (r) => [r.minutes],
     fastest: (r) => [r.minutes],
     cheapest: (r) => [Math.round(r.cost * 100), r.minutes],
     greenest: (r) => [Math.round(r.co2 * 100), r.minutes],
@@ -549,9 +559,10 @@ function drawHud(visible, connection, route) {
   overlayCtx.save();
   overlayCtx.textBaseline = 'top';
   overlayCtx.font = `600 ${u * 1.3}px system-ui, sans-serif`;
-  drawPanel(pad, pad, u * 16, u * 2.6, 0.55);
+  const hudText = `Prefer: ${p.icon} ${p.label}`;
+  drawPanel(pad, pad, overlayCtx.measureText(hudText).width + pad * 1.6, u * 2.6, 0.55);
   overlayCtx.fillStyle = '#c6ff8a';
-  overlayCtx.fillText(`Prefer: ${p.icon} ${p.label}`, pad * 1.8, pad * 1.6);
+  overlayCtx.fillText(hudText, pad * 1.8, pad * 1.6);
   overlayCtx.restore();
 
   if (!connection) {
@@ -795,79 +806,147 @@ function roundRect(x, y, w, h, r) {
 // ---------------------------------------------------------------------------
 // QR detection
 
-function scanForQRCodes() {
-  const xs = getTilePositions(sampleCanvas.width);
-  const ys = getTilePositions(sampleCanvas.height);
-  const detections = [];
+// Scanning a full 1080p frame in overlapping tiles is slow, so:
+//  1. frames are scanned at a reduced size (SCAN_MAX_WIDTH),
+//  2. codes we already know about are re-checked every frame in a small
+//     window around where they were last seen (cheap, keeps them steady),
+//  3. the full tile sweep for new codes is spread over SWEEP_FRAMES frames,
+//  4. jsQR skips its second "inverted colours" pass.
+const SCAN_MAX_WIDTH = 960;
+const SWEEP_FRAMES = 3;
+const JSQR_OPTIONS = { inversionAttempts: 'dontInvert' };
 
-  for (const y of ys) {
-    for (const x of xs) {
-      const tile = sampleCtx.getImageData(x, y, TILE_SIZE, TILE_SIZE);
-      const qrCode = jsQR(tile.data, TILE_SIZE, TILE_SIZE);
-      if (qrCode) {
-        detections.push(offsetQRCode(qrCode, x, y));
-      }
+let scanScale = 1; // sample px per video px
+let scanQrSize = QR_SIZE;
+let scanTile = TILE_SIZE;
+let scanStep = TILE_STEP;
+let sweepTiles = [];
+let frameCount = 0;
+let tileBuffer = new Uint8ClampedArray(0);
+
+function setUpScanner(videoWidth, videoHeight) {
+  scanScale = Math.min(1, SCAN_MAX_WIDTH / videoWidth);
+  sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = Math.round(videoWidth * scanScale);
+  sampleCanvas.height = Math.round(videoHeight * scanScale);
+  sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+  scanQrSize = QR_SIZE * scanScale;
+  scanTile = Math.round(scanQrSize * 2);
+  scanStep = Math.round(scanQrSize);
+
+  sweepTiles = [];
+  for (const y of getTilePositions(sampleCanvas.height)) {
+    for (const x of getTilePositions(sampleCanvas.width)) {
+      sweepTiles.push({ x, y, size: scanTile });
     }
   }
+}
 
+// Returns detections in video-pixel coordinates (not mirrored), each with
+// `raw` = its centre in sample coordinates for next frame's tracking.
+function scanForQRCodes(now) {
+  sampleCtx.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
+  const frame = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+  frameCount++;
+
+  const windows = [];
+  // Track codes seen recently.
+  const trackSize = Math.round(scanTile * 1.15);
+  for (const entry of seen.values()) {
+    if (now - entry.lastSeen < VISIBLE_GRACE_MS) {
+      windows.push({
+        x: clamp(Math.round(entry.raw.x - trackSize / 2), 0, sampleCanvas.width - trackSize),
+        y: clamp(Math.round(entry.raw.y - trackSize / 2), 0, sampleCanvas.height - trackSize),
+        size: Math.min(trackSize, sampleCanvas.width, sampleCanvas.height),
+      });
+    }
+  }
+  // Plus a slice of the full sweep, to find new codes.
+  const slice = frameCount % SWEEP_FRAMES;
+  sweepTiles.forEach((tile, i) => {
+    if (i % SWEEP_FRAMES === slice) {
+      windows.push(tile);
+    }
+  });
+
+  const detections = [];
+  for (const w of windows) {
+    const qrCode = decodeWindow(frame, w);
+    if (qrCode) {
+      detections.push(toVideoCoords(qrCode, w.x, w.y));
+    }
+  }
   return dedupeDetections(detections);
 }
 
-// Start offsets for tiles of TILE_SIZE covering `dimension`, stepping by
-// TILE_STEP and with a final tile flush against the far edge so the whole
-// frame is covered even when it doesn't divide evenly by the step.
-function getTilePositions(dimension) {
-  if (dimension <= TILE_SIZE) {
-    return [0];
+// Copies a square window out of the frame (no extra canvas readback) and
+// decodes it.
+function decodeWindow(frame, { x, y, size }) {
+  const needed = size * size * 4;
+  if (tileBuffer.length !== needed) {
+    tileBuffer = new Uint8ClampedArray(needed);
   }
-
-  const positions = [];
-  for (let pos = 0; pos + TILE_SIZE <= dimension; pos += TILE_STEP) {
-    positions.push(pos);
+  const rowBytes = size * 4;
+  for (let row = 0; row < size; row++) {
+    const start = ((y + row) * frame.width + x) * 4;
+    tileBuffer.set(frame.data.subarray(start, start + rowBytes), row * rowBytes);
   }
-
-  const lastPosition = dimension - TILE_SIZE;
-  if (positions[positions.length - 1] !== lastPosition) {
-    positions.push(lastPosition);
-  }
-
-  return positions;
+  return jsQR(tileBuffer, size, size, JSQR_OPTIONS);
 }
 
-function offsetQRCode(qrCode, offsetX, offsetY) {
-  const shift = (point) => ({ x: point.x + offsetX, y: point.y + offsetY });
+function toVideoCoords(qrCode, offsetX, offsetY) {
+  const shift = (p) => ({ x: (p.x + offsetX) / scanScale, y: (p.y + offsetY) / scanScale });
   const { topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner } = qrCode.location;
-
+  const location = {
+    topLeftCorner: shift(topLeftCorner),
+    topRightCorner: shift(topRightCorner),
+    bottomRightCorner: shift(bottomRightCorner),
+    bottomLeftCorner: shift(bottomLeftCorner),
+  };
+  const center = centerOf(location);
   return {
     data: qrCode.data,
-    location: {
-      topLeftCorner: shift(topLeftCorner),
-      topRightCorner: shift(topRightCorner),
-      bottomRightCorner: shift(bottomRightCorner),
-      bottomLeftCorner: shift(bottomLeftCorner),
-    },
+    location,
+    raw: { x: center.x * scanScale, y: center.y * scanScale },
   };
 }
 
-// The same QR code is often found in more than one overlapping tile, so
-// collapse detections whose bounding boxes are centered near each other.
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+// Start offsets for tiles covering `dimension`, stepping by scanStep, with a
+// final tile flush against the far edge.
+function getTilePositions(dimension) {
+  if (dimension <= scanTile) {
+    return [0];
+  }
+  const positions = [];
+  for (let pos = 0; pos + scanTile <= dimension; pos += scanStep) {
+    positions.push(pos);
+  }
+  const lastPosition = dimension - scanTile;
+  if (positions[positions.length - 1] !== lastPosition) {
+    positions.push(lastPosition);
+  }
+  return positions;
+}
+
+// The same QR code is often found in more than one overlapping window, so
+// collapse detections of the same text centred near each other.
 function dedupeDetections(detections) {
   const unique = [];
-
   for (const detection of detections) {
     const center = centerOf(detection.location);
     const isDuplicate = unique.some((existing) => {
-      const existingCenter = centerOf(existing.location);
-      const dx = center.x - existingCenter.x;
-      const dy = center.y - existingCenter.y;
-      return Math.sqrt(dx * dx + dy * dy) < QR_SIZE;
+      const c = centerOf(existing.location);
+      return existing.data === detection.data && Math.hypot(center.x - c.x, center.y - c.y) < QR_SIZE;
     });
-
     if (!isDuplicate) {
       unique.push(detection);
     }
   }
-
   return unique;
 }
 
