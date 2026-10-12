@@ -13,9 +13,9 @@ Printed QR codes stand for places in my life. Hold the **transport** code betwee
 | `phone` | 🏠 **Home** — Jersey City, NJ |
 | `notebook` | 🎨 **SVA** — 136 W 21st St, New York |
 | `bottle` | 🛒 **ShopRite** — Luis Marin Blvd & 6th St, Jersey City |
+| `object-b` | 💪 **GNC** — Newport Centre, Jersey City |
 | `object-a` | 🧭 **Transport** — connects the two place codes closest to it. The one further **left** on screen is the start. |
-| `object-b` | **Preference** — each appearance cycles ⚡ Fastest → 💵 Cheapest → 🌱 Greenest, and the recommendation updates. |
-| `object-c` | unused for now |
+| `object-c` | **Preference** — each appearance cycles ⚡ Fastest → 💵 Cheapest → 🌱 Greenest, and the recommendation updates. |
 
 For every connected pair the card lists transit 🚇, drive 🚗, bike 🚲 and walk 🚶 with time, rough cost and CO₂. Walks over 45 min and bike rides over 60 min are shown greyed out and never recommended.
 
@@ -25,9 +25,13 @@ Once transport connects two places and the routes are in, a pop-up appears and t
 
 Places, QR mapping, mirroring, voice and the cost/CO₂ numbers are all in `config.js`.
 
-### Google Maps API key
+### Where the times come from
 
-Routes come from the [Google Routes API](https://developers.google.com/maps/documentation/routes/overview). Without a key the app still works, using a rough offline estimate from straight-line distance.
+No API key needed. `PRESET_ROUTES` in `config.js` holds door-to-door times looked up in Google Maps and the PATH app. For Home → SVA the app also checks the PATH timetable (`TIMETABLES`) and adds the wait for the next train from Grove St, e.g. *"The next train leaves at 9:16 PM."* Pairs or modes that aren't filled in are rough guesses from distance and are marked *est.*
+
+### Google Maps API key (optional)
+
+With a key, live routes from the [Google Routes API](https://developers.google.com/maps/documentation/routes/overview) replace the preset times.
 
 1. In Google Cloud Console, create a key and enable **Routes API**.
 2. Restrict the key to your site URLs (HTTP referrers) — it's visible in the browser.

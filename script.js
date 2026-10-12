@@ -242,6 +242,14 @@ function findConnection(visible) {
 
 function routeFor(connection, now) {
   const key = `${connection.from.role}->${connection.to.role}`;
+  const from = PLACES[connection.from.role];
+  const to = PLACES[connection.to.role];
+
+  // Times you looked up yourself win, unless there's a Google key.
+  if (!apiKey && PRESET_ROUTES[key]) {
+    return { status: 'done', source: 'preset', results: presetRoutes(PRESET_ROUTES[key], from, to) };
+  }
+
   const cached = routeCache.get(key);
   if (cached) {
     return cached;
@@ -355,6 +363,74 @@ function estimateRoutes(from, to) {
     results.push(describeRoute('WALK', (miles / 3) * 60, miles, from, to));
   }
   return results;
+}
+
+// Builds results from PRESET_ROUTES in config.js. A mode set to 'estimate'
+// is filled in from the offline guess.
+function presetRoutes(preset, from, to) {
+  const results = [];
+  for (const [mode, entry] of Object.entries(preset)) {
+    if (entry === 'estimate') {
+      const guess = estimateRoutes(from, to).find((r) => r.mode === mode);
+      if (guess) {
+        guess.detail = 'estimate';
+        results.push(guess);
+      }
+      continue;
+    }
+
+    let minutes = entry.minutes;
+    let next = null;
+    if (entry.schedule) {
+      // Wait for the next train, counting the walk to the station.
+      next = nextDeparture(TIMETABLES[entry.schedule], entry.walkToStation || 0);
+      if (next) {
+        minutes += next.wait;
+      }
+    }
+
+    const result = describeRoute(mode, minutes, entry.miles, from, to, entry.fare ?? null, entry.detail || '');
+    result.say = entry.say || '';
+    if (next) {
+      result.next = next;
+      result.detail = `${entry.detail} · next ${formatClock(next.time)}`;
+    }
+    results.push(result);
+  }
+  return results;
+}
+
+// Expands [first, last, everyMinutes] rows into departure times today and
+// returns the first one you can still catch.
+function nextDeparture(timetable, walkMinutes) {
+  if (!timetable) {
+    return null;
+  }
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+  const earliest = nowMin + walkMinutes;
+
+  for (const [first, last, every] of timetable) {
+    const start = toMinutes(first);
+    const end = toMinutes(last);
+    for (let t = start; t <= end; t += every) {
+      if (t >= earliest) {
+        const time = new Date(now);
+        time.setHours(Math.floor(t / 60), t % 60, 0, 0);
+        return { time, wait: t - earliest };
+      }
+    }
+  }
+  return null; // No more trains in the timetable today.
+}
+
+function toMinutes(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function formatClock(date) {
+  return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
 function describeRoute(mode, minutes, miles, from, to, fareUsd = null, detail = '') {
@@ -543,10 +619,11 @@ function updatePopup(connection, route, now) {
     const to = PLACES[connection.to.role];
     const best = recommend(route.results);
     const key = `${connection.from.role}->${connection.to.role}|${preferenceIndex}`;
+    const renderKey = `${key}|${route.results.map((r) => `${Math.round(r.minutes)}${r.detail}`).join()}`;
 
-    if (key !== popupKey) {
+    if (renderKey !== popupKey) {
       renderPopup(from, to, route, best);
-      popupKey = key;
+      popupKey = renderKey;
     }
     popup.hidden = false;
     requestAnimationFrame(() => popup.classList.add('show'));
@@ -597,13 +674,15 @@ function renderPopup(from, to, route, best) {
       li.className = 'too-long';
     }
     const info = MODE_INFO[r.mode];
-    li.textContent = `${info.icon} ${info.label} · ${formatMinutes(r.minutes)} · ${formatCost(r.cost)}${r.tooLong ? ' · too far' : ''}`;
+    li.textContent = `${info.icon} ${info.label} · ${formatMinutes(r.minutes)} · ${formatCost(r.cost)}${r.detail === 'estimate' ? ' · est.' : ''}${r.tooLong ? ' · too far' : ''}`;
     popupList.append(li);
   }
 
-  popupSource.textContent = route.source === 'live'
-    ? 'Live from Google Maps · cost & CO₂ are estimates'
-    : 'Offline estimate — add a Google Maps key for real routes';
+  popupSource.textContent = {
+    live: 'Live from Google Maps · cost & CO₂ are estimates',
+    preset: 'Times from Google Maps & the PATH app · cost & CO₂ are estimates',
+    estimate: 'Rough estimate — add times to PRESET_ROUTES in config.js',
+  }[route.source];
 
   currentSpeech = speechFor(from, to, best, others);
 }
@@ -616,9 +695,20 @@ function speechFor(from, to, best, others) {
   const verb = { TRANSIT: 'take transit', DRIVE: 'drive', BICYCLE: 'bike', WALK: 'walk' }[best.mode];
   let text = `From ${from.label} to ${to.label}, the ${pref} way is to ${verb}. ` +
     `It takes about ${spokenMinutes(best.minutes)}`;
-  text += best.cost > 0 ? `, and costs around ${Math.round(best.cost)} dollars.` : ', and it\'s free.';
-  if (best.mode === 'TRANSIT' && best.detail) {
+  if (best.cost <= 0) {
+    text += ', and it\'s free.';
+  } else if (best.cost < 1) {
+    text += ', and costs less than a dollar.';
+  } else {
+    text += `, and costs around ${Math.round(best.cost)} dollars.`;
+  }
+  if (best.say) {
+    text += ` ${best.say}`;
+  } else if (best.mode === 'TRANSIT' && best.detail && !best.next) {
     text += ` Ride ${best.detail.replace(/ → /g, ', then ')}.`;
+  }
+  if (best.next) {
+    text += ` The next train leaves at ${formatClock(best.next.time)}.`;
   }
   const alt = others.find((r) => !r.tooLong);
   if (alt) {

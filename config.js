@@ -15,9 +15,9 @@ const QR_ROLES = {
   phone: 'home',
   notebook: 'sva',
   bottle: 'shoprite',
+  'object-b': 'gnc',
   'object-a': 'transport',
-  'object-b': 'preference',
-  // 'object-c' is free — not used yet.
+  'object-c': 'preference',
 };
 
 // Places. `address` is what Google Maps routes to/from. `lat`/`lng` are
@@ -50,12 +50,91 @@ const PLACES = {
     sub: 'Groceries',
     icon: '🛒',
     color: '#ff6b6b',
-    address: 'ShopRite, Luis Marin Blvd & 6th St, Jersey City, NJ 07302',
+    address: 'ShopRite of Metro Plaza, Luis Marin Blvd & 6th St, Jersey City, NJ 07302',
     lat: 40.7262,
     lng: -74.0420,
     state: 'NJ',
     parking: 0,
   },
+  gnc: {
+    label: 'GNC',
+    sub: 'Newport',
+    icon: '💪',
+    color: '#c58bff',
+    address: 'GNC, Newport Centre, Jersey City, NJ',
+    lat: 40.7274,
+    lng: -74.0377,
+    state: 'NJ',
+    parking: 0,
+  },
+};
+
+// Real door-to-door times, looked up in Google Maps and the PATH app.
+// Used whenever there's no Google API key. Key is "from->to".
+// A mode set to 'estimate' is guessed from distance. Pairs not listed here
+// fall back to the guess for every mode.
+const PRESET_ROUTES = {
+  'home->sva': {
+    TRANSIT: {
+      minutes: 30, // door to door, not counting the wait for the train
+      miles: 4,
+      fare: 3.00,
+      detail: 'PATH Grove St → 23rd St',
+      say: 'Take the PATH from Grove Street to 23rd Street.',
+      schedule: 'GROVE_TO_33RD',
+      walkToStation: 4, // home -> Grove St platform
+    },
+    DRIVE: 'estimate',
+  },
+  'sva->home': {
+    TRANSIT: {
+      minutes: 30,
+      miles: 4,
+      fare: 3.00,
+      detail: 'PATH 23rd St → Grove St',
+      say: 'Take the PATH from 23rd Street to Grove Street.',
+    },
+    DRIVE: 'estimate',
+  },
+  'home->shoprite': {
+    WALK: { minutes: 9, miles: 0.4 },
+    BICYCLE: { minutes: 5, miles: 0.4 },
+    DRIVE: { minutes: 3, miles: 0.4 },
+  },
+  'shoprite->home': {
+    WALK: { minutes: 9, miles: 0.4 },
+    BICYCLE: { minutes: 5, miles: 0.4 },
+    DRIVE: { minutes: 3, miles: 0.4 },
+  },
+  'home->gnc': {
+    WALK: { minutes: 16, miles: 0.7 },
+    BICYCLE: { minutes: 7, miles: 0.7 },
+    DRIVE: { minutes: 5, miles: 0.7 },
+  },
+  'gnc->home': {
+    WALK: { minutes: 16, miles: 0.7 },
+    BICYCLE: { minutes: 7, miles: 0.7 },
+    DRIVE: { minutes: 5, miles: 0.7 },
+  },
+};
+
+// Train timetables: [first departure, last departure, every N minutes].
+// GROVE_TO_33RD is copied from the PATH app (Grove St -> 23rd St, 33rd St
+// line). Rows marked "guess" weren't in the screenshots.
+const TIMETABLES = {
+  GROVE_TO_33RD: [
+    ['07:08', '07:33', 5],
+    ['07:37', '08:45', 4],
+    ['08:51', '09:57', 6], // guess
+    ['10:04', '15:04', 12],
+    ['15:13', '15:53', 10],
+    ['15:58', '18:58', 5], // 18:53 and 18:58 are a guess
+    ['19:03', '19:53', 10],
+    ['20:04', '22:16', 12],
+    ['22:31', '22:31', 1],
+    ['22:44', '22:44', 1],
+    ['23:04', '23:04', 1],
+  ],
 };
 
 // Rough numbers for "cheapest" and "greenest". Edit freely — they're
@@ -64,7 +143,7 @@ const COSTS = {
   carPerMile: 0.70,       // gas + wear, USD
   hudsonToll: 17.0,       // NJ -> NY crossing (tunnel/bridge), USD
   transitLocal: 2.90,     // one bus/subway ride, USD
-  transitCrossHudson: 6.0, // PATH/NJ Transit + subway, USD
+  transitCrossHudson: 3.0, // one PATH ride, USD
 };
 
 const CO2_KG_PER_MILE = {
