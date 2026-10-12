@@ -3,13 +3,39 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>tracking</title>
+  <title>QR Routes</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <video id="webcam" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
+
+  <select id="camera-select" aria-label="Camera" hidden></select>
+
+  <aside id="popup" role="dialog" aria-live="polite" aria-labelledby="popup-title" hidden>
+    <div class="popup-head">
+      <h2 id="popup-title"></h2>
+      <div class="popup-buttons">
+        <button id="speak-button" type="button" aria-label="Read it again">▶︎</button>
+        <button id="mute-button" type="button" aria-label="Mute voice">🔊</button>
+      </div>
+    </div>
+    <div id="popup-best"></div>
+    <ul id="popup-list"></ul>
+    <p id="popup-source"></p>
+  </aside>
+
+  <div id="start">
+    <h1>QR Routes</h1>
+    <p>Hold the 🧭 transport code between two places to hear how to get there.</p>
+    <button id="start-button" type="button">Start camera &amp; voice 🔊</button>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script src="config.js"></script>
   <script src="script.js"></script>
+  <script>
+    if (MIRROR_VIDEO) document.body.classList.add('mirror');
+  </script>
 </body>
 </html>

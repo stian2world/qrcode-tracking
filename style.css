@@ -5,6 +5,8 @@ html, body {
   height: 100%;
   background: #000;
   overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #fff;
 }
 
 #webcam, #overlay {
@@ -17,6 +19,166 @@ html, body {
   display: block;
 }
 
+/* Only the video is flipped; the overlay is drawn already mirrored so its
+   text reads normally. */
+.mirror #webcam {
+  transform: scaleX(-1);
+}
+
 #overlay {
   pointer-events: none;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Start screen */
+#start {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  text-align: center;
+  background: #111;
+}
+
+#start h1 {
+  margin: 0;
+  font-size: 40px;
+}
+
+#start p {
+  margin: 0 0 12px;
+  color: #bbb;
+  max-width: 420px;
+}
+
+#start-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 28px;
+  font-size: 18px;
+  font-weight: 600;
+  background: #c6ff8a;
+  color: #111;
+}
+
+/* Camera picker */
+#camera-select {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  max-width: 260px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+}
+
+/* Route pop-up */
+#popup {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: min(380px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 18px 20px 14px;
+  border-radius: 18px;
+  background: rgba(20, 20, 20, 0.88);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transform: translateY(-12px) scale(0.97);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+#popup.show {
+  opacity: 1;
+  transform: none;
+}
+
+.popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#popup h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.popup-buttons {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.popup-buttons button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+#popup-best {
+  margin: 14px 0 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(198, 255, 138, 0.15);
+  color: #c6ff8a;
+}
+
+.best-tag {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+}
+
+.best-mode {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 2px 0;
+}
+
+.best-meta {
+  font-size: 15px;
+  color: #e8ffd3;
+}
+
+#popup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+}
+
+#popup-list li {
+  padding: 5px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#popup-list li.too-long {
+  color: #777;
+}
+
+#popup-source {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #888;
 }
