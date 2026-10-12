@@ -36,6 +36,7 @@ const PLACES = {
   },
   sva: {
     label: 'SVA',
+    spoken: 'S V A', // how the voice says it
     sub: 'New York',
     icon: '🎨',
     color: '#7ab8ff',
@@ -58,6 +59,7 @@ const PLACES = {
   },
   gnc: {
     label: 'GNC',
+    spoken: 'G N C',
     sub: 'Newport',
     icon: '💊',
     color: '#c58bff',
@@ -81,8 +83,7 @@ const PRESET_ROUTES = {
       fare: 3.00,
       detail: 'PATH Grove St → 23rd St',
       say: 'Take the PATH from Grove Street to 23rd Street.',
-      schedule: 'GROVE_TO_33RD',
-      walkToStation: 4, // home -> Grove St platform
+      schedule: 'GROVE_TO_33RD', // shows the next train from now
     },
     DRIVE: 'estimate',
   },
@@ -93,6 +94,7 @@ const PRESET_ROUTES = {
       fare: 3.00,
       detail: 'PATH 23rd St → Grove St',
       say: 'Take the PATH from 23rd Street to Grove Street.',
+      schedule: 'TWENTY_THIRD_TO_GROVE',
     },
     DRIVE: 'estimate',
   },
@@ -135,6 +137,26 @@ const TIMETABLES = {
     ['22:44', '22:44', 1],
     ['23:04', '23:04', 1],
   ],
+
+  // 23rd St -> Grove St (going home). NOT from the PATH app yet — it reuses
+  // the same frequencies as the other direction, so the popup marks it
+  // "(est.)". Replace the rows with the real times and set estimated: false.
+  TWENTY_THIRD_TO_GROVE: {
+    estimated: true,
+    rows: [
+      ['07:08', '07:33', 5],
+      ['07:37', '08:45', 4],
+      ['08:51', '09:57', 6],
+      ['10:04', '15:04', 12],
+      ['15:13', '15:53', 10],
+      ['15:58', '18:58', 5],
+      ['19:03', '19:53', 10],
+      ['20:04', '22:16', 12],
+      ['22:31', '22:31', 1],
+      ['22:44', '22:44', 1],
+      ['23:04', '23:04', 1],
+    ],
+  },
 };
 
 // Rough numbers for "cheapest" and "greenest". Edit freely — they're
@@ -153,8 +175,9 @@ const CO2_KG_PER_MILE = {
   BICYCLE: 0,
 };
 
-// "Recommended" walks whenever walking takes this long or less; otherwise it
-// takes the train (PATH) if there is one, otherwise the fastest option.
+// The app only ever recommends walking or the PATH (never driving).
+// "Recommended" walks whenever walking takes this long or less, otherwise
+// takes the PATH.
 const WALK_FIRST_MAX_MINUTES = 20;
 
 // Walking or biking longer than this isn't a realistic suggestion.
@@ -166,6 +189,14 @@ const MAX_MINUTES = {
 // Show the webcam like a mirror (your left = screen left). Set to false for
 // a camera pointing down at a table or away from you.
 const MIRROR_VIDEO = true;
+
+// Sounds. `chime` plays a short ding when a code appears; `sayNames` reads
+// the place name ("Home", "S V A", ...). The route is always read when two
+// places are connected. The 🔊 button in the pop-up mutes everything.
+const SOUND = {
+  chime: true,
+  sayNames: true,
+};
 
 // Read-aloud voice. `name` is optional — leave '' to use the default voice
 // for `lang`. On a Mac, e.g. 'Samantha'.

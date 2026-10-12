@@ -88,6 +88,11 @@ let currentStream = null;
 
 document.getElementById('start-button').addEventListener('click', async () => {
   unlockSpeech();
+  try {
+    audioCtx = new AudioContext();
+  } catch (error) {
+    // No Web Audio.
+  }
   startScreen.hidden = true;
   await startCamera(savedCameraId());
   await fillCameraList();
@@ -176,6 +181,7 @@ function tick() {
     const visible = visibleByRole(now);
 
     handlePreference(visible);
+    handleAnnouncements(visible, now);
     const connection = findConnection(visible);
     const route = connection ? routeFor(connection, now) : null;
     if (!connection) {
@@ -379,46 +385,62 @@ function presetRoutes(preset, from, to) {
     let minutes = entry.minutes;
     let next = null;
     if (entry.schedule) {
-      // Wait for the next train, counting the walk to the station.
+      // The next train leaving from now; the wait is added to the trip.
       next = nextDeparture(TIMETABLES[entry.schedule], entry.walkToStation || 0);
-      if (next) {
+      if (next && !next.tomorrow) {
         minutes += next.wait;
       }
     }
 
     const result = describeRoute(mode, minutes, entry.miles, from, to, entry.fare ?? null, entry.detail || '');
     result.say = entry.say || '';
-    if (next) {
-      result.next = next;
-      result.detail = `${entry.detail} · next ${formatClock(next.time)}`;
-    }
+    result.next = next;
     results.push(result);
   }
   return results;
 }
 
-// Expands [first, last, everyMinutes] rows into departure times today and
-// returns the first one you can still catch.
-function nextDeparture(timetable, walkMinutes) {
+// Expands [first, last, everyMinutes] rows into departure times and returns
+// the first train at or after now (+ walkMinutes). After the last train of
+// the night it returns tomorrow's first train.
+// A timetable is either an array of rows or { estimated: true, rows: [...] }.
+function nextDeparture(timetable, walkMinutes = 0) {
   if (!timetable) {
     return null;
   }
+  const rows = Array.isArray(timetable) ? timetable : timetable.rows;
+  const estimated = !Array.isArray(timetable) && Boolean(timetable.estimated);
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-  const earliest = nowMin + walkMinutes;
+  const earliest = Math.ceil(nowMin + walkMinutes);
 
-  for (const [first, last, every] of timetable) {
-    const start = toMinutes(first);
-    const end = toMinutes(last);
-    for (let t = start; t <= end; t += every) {
-      if (t >= earliest) {
-        const time = new Date(now);
-        time.setHours(Math.floor(t / 60), t % 60, 0, 0);
-        return { time, wait: t - earliest };
-      }
+  const departures = [];
+  for (const [first, last, every] of rows) {
+    for (let t = toMinutes(first); t <= toMinutes(last); t += every) {
+      departures.push(t);
     }
   }
-  return null; // No more trains in the timetable today.
+  departures.sort((x, y) => x - y);
+  if (departures.length === 0) {
+    return null;
+  }
+
+  let t = departures.find((d) => d >= earliest);
+  let dayOffset = 0;
+  if (t === undefined) {
+    t = departures[0];
+    dayOffset = 1;
+  }
+  const time = new Date(now);
+  time.setDate(time.getDate() + dayOffset);
+  time.setHours(Math.floor(t / 60), t % 60, 0, 0);
+  return { time, wait: Math.max(0, (time - now) / 60000 - walkMinutes), tomorrow: dayOffset === 1, estimated };
+}
+
+function nextTrainText(next) {
+  const mins = Math.round((next.time - new Date()) / 60000);
+  const when = next.tomorrow ? 'tomorrow' : mins <= 0 ? 'now' : `in ${mins} min`;
+  return `🚇 Next PATH ${formatClock(next.time)} · ${when}${next.estimated ? ' (est.)' : ''}`;
 }
 
 function toMinutes(hhmm) {
@@ -458,32 +480,38 @@ function haversineMiles(a, b) {
   return 3958.8 * 2 * Math.asin(Math.sqrt(h));
 }
 
+// Never recommends driving (or biking) while walking or the PATH is an
+// option. Within walk/PATH:
+//  - Recommended: walk if it's short (WALK_FIRST_MAX_MINUTES), else PATH.
+//  - Fastest / Cheapest / Greenest: the best walk/PATH by that measure.
+// Bike, then drive, are only a last resort when neither exists.
+const PRIORITY_MODES = ['WALK', 'TRANSIT'];
+
 function recommend(results) {
   const options = results.filter((r) => !r.tooLong);
-  if (options.length === 0) {
-    return null;
-  }
-  const preference = PREFERENCES[preferenceIndex].key;
+  const preferred = options.filter((r) => PRIORITY_MODES.includes(r.mode));
+  const fallback = ['WALK', 'TRANSIT', 'BICYCLE', 'DRIVE']
+    .map((mode) => results.find((r) => r.mode === mode))
+    .find(Boolean);
 
-  // "Recommended": walk when it's close, take the train when there is one,
-  // otherwise whatever is fastest.
+  if (preferred.length === 0) {
+    return fallback || null;
+  }
+
+  const preference = PREFERENCES[preferenceIndex].key;
   if (preference === 'recommended') {
-    const walk = options.find((r) => r.mode === 'WALK' && r.minutes <= WALK_FIRST_MAX_MINUTES);
-    const transit = options.find((r) => r.mode === 'TRANSIT');
-    const pick = walk || transit;
-    if (pick) {
-      return pick;
-    }
+    const walk = preferred.find((r) => r.mode === 'WALK' && r.minutes <= WALK_FIRST_MAX_MINUTES);
+    const transit = preferred.find((r) => r.mode === 'TRANSIT');
+    return walk || transit || preferred[0];
   }
 
   const score = {
-    recommended: (r) => [r.minutes],
     fastest: (r) => [r.minutes],
     cheapest: (r) => [Math.round(r.cost * 100), r.minutes],
     greenest: (r) => [Math.round(r.co2 * 100), r.minutes],
   }[preference];
 
-  return options.reduce((best, r) => {
+  return preferred.reduce((best, r) => {
     const [a1, a2 = 0] = score(r);
     const [b1, b2 = 0] = score(best);
     return a1 < b1 || (a1 === b1 && a2 < b2) ? r : best;
@@ -613,7 +641,7 @@ let popupLastConnected = 0;
 let currentSpeech = '';
 let muted = false;
 
-speakButton.addEventListener('click', () => speak(currentSpeech, true));
+speakButton.addEventListener('click', () => speak(currentSpeech, { force: true, interrupt: true }));
 muteButton.addEventListener('click', () => {
   muted = !muted;
   muteButton.textContent = muted ? '🔇' : '🔊';
@@ -630,7 +658,7 @@ function updatePopup(connection, route, now) {
     const to = PLACES[connection.to.role];
     const best = recommend(route.results);
     const key = `${connection.from.role}->${connection.to.role}|${preferenceIndex}`;
-    const renderKey = `${key}|${route.results.map((r) => `${Math.round(r.minutes)}${r.detail}`).join()}`;
+    const renderKey = `${key}|${route.results.map((r) => `${Math.round(r.minutes)}${r.detail}${r.next ? nextTrainText(r.next) : ''}`).join()}`;
 
     if (renderKey !== popupKey) {
       renderPopup(from, to, route, best);
@@ -673,6 +701,12 @@ function renderPopup(from, to, route, best) {
     tag.className = 'best-tag';
     tag.textContent = `${pref.icon} ${pref.label} pick`;
     popupBest.append(tag, head, meta);
+    if (best.next) {
+      const train = document.createElement('div');
+      train.className = 'best-next';
+      train.textContent = nextTrainText(best.next);
+      popupBest.append(train);
+    }
   } else {
     popupBest.textContent = 'No good option found.';
   }
@@ -698,32 +732,20 @@ function renderPopup(from, to, route, best) {
   currentSpeech = speechFor(from, to, best, others);
 }
 
-function speechFor(from, to, best, others) {
+// Reads only the recommended route.
+function speechFor(from, to, best) {
+  const a = spokenName(from);
+  const b = spokenName(to);
   if (!best) {
-    return `I couldn't find a good way from ${from.label} to ${to.label}.`;
+    return `I couldn't find a good way from ${a} to ${b}.`;
   }
-  const pref = PREFERENCES[preferenceIndex].label.toLowerCase();
-  const verb = { TRANSIT: 'take transit', DRIVE: 'drive', BICYCLE: 'bike', WALK: 'walk' }[best.mode];
-  let text = `From ${from.label} to ${to.label}, the ${pref} way is to ${verb}. ` +
-    `It takes about ${spokenMinutes(best.minutes)}`;
-  if (best.cost <= 0) {
-    text += ', and it\'s free.';
-  } else if (best.cost < 1) {
-    text += ', and costs less than a dollar.';
-  } else {
-    text += `, and costs around ${Math.round(best.cost)} dollars.`;
-  }
-  if (best.say) {
-    text += ` ${best.say}`;
-  } else if (best.mode === 'TRANSIT' && best.detail && !best.next) {
-    text += ` Ride ${best.detail.replace(/ → /g, ', then ')}.`;
-  }
+  const how = best.say
+    || { TRANSIT: 'Take transit.', DRIVE: 'Drive.', BICYCLE: 'Bike there.', WALK: 'Walk there.' }[best.mode];
+  let text = `From ${a} to ${b}: ${how} About ${spokenMinutes(best.minutes)}.`;
   if (best.next) {
-    text += ` The next train leaves at ${formatClock(best.next.time)}.`;
-  }
-  const alt = others.find((r) => !r.tooLong);
-  if (alt) {
-    text += ` Or ${MODE_INFO[alt.mode].label.toLowerCase()}, about ${spokenMinutes(alt.minutes)}.`;
+    text += best.next.tomorrow
+      ? ` No more trains tonight. The first train tomorrow is at ${formatClock(best.next.time)}.`
+      : ` The next train leaves at ${formatClock(best.next.time)}.`;
   }
   return text;
 }
@@ -753,11 +775,15 @@ function unlockSpeech() {
   speechSynthesis.speak(silent);
 }
 
-function speak(text, force = false) {
+// Queued by default so place names and the route don't cut each other off.
+// `interrupt` clears anything still waiting first.
+function speak(text, { force = false, interrupt = false } = {}) {
   if (!text || !('speechSynthesis' in window) || (muted && !force)) {
     return;
   }
-  speechSynthesis.cancel();
+  if (interrupt) {
+    speechSynthesis.cancel();
+  }
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = VOICE.lang;
   utterance.rate = VOICE.rate;
@@ -767,6 +793,73 @@ function speak(text, force = false) {
     utterance.voice = voice;
   }
   speechSynthesis.speak(utterance);
+}
+
+// ---------------------------------------------------------------------------
+// Announcements: a short chime + the place name whenever a code shows up.
+
+const ANNOUNCE_COOLDOWN_MS = 3000; // don't repeat a name if the code flickers
+const lastAnnounced = new Map(); // role -> time
+let previouslyVisible = new Set();
+let audioCtx = null;
+
+function handleAnnouncements(visible, now) {
+  for (const role of visible.keys()) {
+    if (previouslyVisible.has(role)) {
+      continue;
+    }
+    if (now - (lastAnnounced.get(role) ?? -Infinity) < ANNOUNCE_COOLDOWN_MS) {
+      continue;
+    }
+    lastAnnounced.set(role, now);
+    announce(role);
+  }
+  previouslyVisible = new Set(visible.keys());
+}
+
+function announce(role) {
+  if (muted) {
+    return;
+  }
+  if (SOUND.chime) {
+    chime(role === 'transport' ? 660 : role === 'preference' ? 523 : 880);
+  }
+  if (!SOUND.sayNames) {
+    return;
+  }
+  if (PLACES[role]) {
+    speak(spokenName(PLACES[role]));
+  } else if (role === 'transport') {
+    speak('Transport.');
+  } else if (role === 'preference') {
+    speak(`${PREFERENCES[preferenceIndex].label}.`);
+  }
+}
+
+function spokenName(place) {
+  return place.spoken || place.label;
+}
+
+// A soft two-note "ding" made with Web Audio (no sound files needed).
+function chime(freq) {
+  try {
+    audioCtx = audioCtx || new AudioContext();
+    const t = audioCtx.currentTime;
+    [freq, freq * 1.5].forEach((f, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      gain.gain.setValueAtTime(0.0001, t + i * 0.09);
+      gain.gain.exponentialRampToValueAtTime(0.25, t + i * 0.09 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.09 + 0.35);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t + i * 0.09);
+      osc.stop(t + i * 0.09 + 0.4);
+    });
+  } catch (error) {
+    // No Web Audio — skip the chime.
+  }
 }
 
 function formatMinutes(minutes) {

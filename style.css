@@ -156,6 +156,15 @@ button {
   margin: 2px 0;
 }
 
+.best-next {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(198, 255, 138, 0.25);
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+}
+
 .best-meta {
   font-size: 15px;
   color: #e8ffd3;
