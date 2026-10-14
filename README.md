@@ -19,7 +19,7 @@ Printed QR codes stand for places in my life. Hold the **transport** code betwee
 
 For every connected pair the card lists transit 🚇, drive 🚗, bike 🚲 and walk 🚶 with time, rough cost and CO₂. Walks over 45 min and bike rides over 60 min are shown greyed out and never recommended.
 
-Click **Start camera & voice** first — browsers only allow a page to speak after a click. The webcam is shown like a mirror, so your left is the screen's left. If the browser picked the wrong camera (e.g. an iPhone via Continuity Camera), switch it in the menu at the bottom-right; the choice is remembered.
+Click **Start camera & voice** first — browsers only allow a page to speak after a click. The webcam is shown like a mirror, so your left is the screen's left. Browsers don't offer a "flip camera" control for web pages, so the app has its own **🔄 button** (bottom-left) that switches between the front and back camera on a phone. The front camera is shown mirrored, the back camera isn't. On a computer with several cameras, a menu next to it picks a specific one. The choice is remembered.
 
 Whenever a code comes into view you hear a short chime and its name (*"Home"*, *"S V A"*, *"Transport"*…). Once transport connects two places and the routes are in, a pop-up appears and only the **recommended route is read out loud** (Web Speech API), e.g. *"From Home to S V A: Take the PATH from Grove Street to 23rd Street. About 39 minutes. The next train leaves at 9:52 PM."* It's read once per connection, and again when the preference code changes the pick. ▶︎ replays it, 🔊 mutes. The pop-up closes about a second after the codes are taken away.
 
@@ -36,6 +36,15 @@ With a key, live routes from the [Google Routes API](https://developers.google.c
 1. In Google Cloud Console, create a key and enable **Routes API**.
 2. Restrict the key to your site URLs (HTTP referrers) — it's visible in the browser.
 3. Open the app once as `https://…/?key=YOUR_KEY`. The key is remembered in that browser and removed from the address bar, so it never needs to be committed.
+
+## Phone and laptop
+
+The layout adapts to the screen (tested at iPhone 12 Pro size, portrait and landscape, and on a laptop):
+
+- the whole camera picture is always shown (never cropped), and labels are drawn in screen pixels so they stay readable;
+- the top bar (✨ preference — tap it to switch — and 🔄 camera flip) stays clear of the iPhone notch;
+- every button is at least 44 × 44 px;
+- the route pop-up is a card on the top-right on a laptop, a sheet along the bottom on a phone in portrait, and a side panel on a phone held sideways.
 
 ## Running locally
 

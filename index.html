@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>QR Routes</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -10,7 +10,14 @@
   <video id="webcam" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
 
-  <select id="camera-select" aria-label="Camera" hidden></select>
+  <header id="topbar">
+    <button id="pref-button" type="button" aria-label="Change preference" title="Tap to change preference">✨ Recommended</button>
+    <div id="camera-controls">
+      <select id="camera-select" aria-label="Camera" hidden></select>
+      <button id="flip-button" type="button" aria-label="Switch front / back camera" title="Switch camera" hidden>🔄</button>
+    </div>
+  </header>
+  <p id="hint" role="status" hidden></p>
 
   <aside id="popup" role="dialog" aria-live="polite" aria-labelledby="popup-title" hidden>
     <div class="popup-head">
@@ -34,8 +41,5 @@
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <script src="config.js"></script>
   <script src="script.js"></script>
-  <script>
-    if (MIRROR_VIDEO) document.body.classList.add('mirror');
-  </script>
 </body>
 </html>

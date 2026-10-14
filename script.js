@@ -83,8 +83,14 @@ function loadApiKey() {
 
 const startScreen = document.getElementById('start');
 const cameraSelect = document.getElementById('camera-select');
+const flipButton = document.getElementById('flip-button');
 let ticking = false;
 let currentStream = null;
+let mirrored = MIRROR_VIDEO;
+
+// Which camera to use: { facing: 'user' | 'environment' } (front / back,
+// switched with the 🔄 button) or { deviceId } (picked from the menu).
+let cameraChoice = loadCameraChoice();
 
 document.getElementById('start-button').addEventListener('click', async () => {
   unlockSpeech();
@@ -94,50 +100,75 @@ document.getElementById('start-button').addEventListener('click', async () => {
     // No Web Audio.
   }
   startScreen.hidden = true;
-  await startCamera(savedCameraId());
+  await startCamera();
+  await fillCameraList();
+});
+
+// Browsers have no built-in "flip camera" for web pages, so the page has
+// its own button: it toggles between the front and back camera.
+flipButton.addEventListener('click', async () => {
+  const facingNow = currentStream?.getVideoTracks()[0]?.getSettings().facingMode || cameraChoice.facing || 'user';
+  cameraChoice = { facing: facingNow === 'environment' ? 'user' : 'environment' };
+  saveCameraChoice();
+  await startCamera();
   await fillCameraList();
 });
 
 cameraSelect.addEventListener('change', () => {
-  try {
-    localStorage.setItem('cameraId', cameraSelect.value);
-  } catch (error) {
-    // Not remembered — fine.
-  }
-  startCamera(cameraSelect.value);
+  cameraChoice = { deviceId: cameraSelect.value };
+  saveCameraChoice();
+  startCamera();
 });
 
-function savedCameraId() {
+function loadCameraChoice() {
   try {
-    return localStorage.getItem('cameraId');
+    return JSON.parse(localStorage.getItem('camera')) || { facing: 'user' };
   } catch (error) {
-    return null;
+    return { facing: 'user' };
   }
 }
 
-async function startCamera(deviceId) {
+function saveCameraChoice() {
+  try {
+    localStorage.setItem('camera', JSON.stringify(cameraChoice));
+  } catch (error) {
+    // Not remembered — fine.
+  }
+}
+
+async function startCamera() {
   if (currentStream) {
     currentStream.getTracks().forEach((track) => track.stop());
+    currentStream = null;
   }
-  const constraints = {
-    audio: false,
-    video: { ...VIDEO_CONSTRAINTS.video, ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
-  };
+  const which = cameraChoice.deviceId
+    ? { deviceId: { exact: cameraChoice.deviceId } }
+    : { facingMode: { ideal: cameraChoice.facing || 'user' } };
   try {
-    currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+    currentStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { ...VIDEO_CONSTRAINTS.video, ...which },
+    });
   } catch (error) {
-    if (deviceId) {
+    if (cameraChoice.deviceId) {
       // The remembered camera is gone (unplugged etc.) — use the default one.
-      return startCamera(null);
+      cameraChoice = { facing: 'user' };
+      return startCamera();
     }
     console.error('Unable to access webcam:', error);
     return;
   }
   video.srcObject = currentStream;
+
+  // Mirror the front camera (like a mirror), never the back camera.
+  const facing = currentStream.getVideoTracks()[0]?.getSettings().facingMode || cameraChoice.facing;
+  mirrored = MIRROR_VIDEO && facing !== 'environment';
+  document.body.classList.toggle('mirror', mirrored);
+  seen.clear(); // old positions belong to the other camera
 }
 
-// Lets you pick the built-in webcam if the browser grabbed another camera
-// (e.g. an iPhone via Continuity Camera).
+// Menu to pick a specific camera (e.g. the built-in webcam if the browser
+// grabbed an iPhone via Continuity Camera). Hidden with only one camera.
 async function fillCameraList() {
   const devices = await navigator.mediaDevices.enumerateDevices();
   const cameras = devices.filter((d) => d.kind === 'videoinput');
@@ -151,14 +182,39 @@ async function fillCameraList() {
     cameraSelect.append(option);
   });
   cameraSelect.hidden = cameras.length < 2;
+  flipButton.hidden = false;
 }
 
+// The overlay canvas covers the whole window and is drawn in screen (CSS)
+// pixels, so text and tags are the same readable size on a phone and on a
+// laptop. The video is shown with object-fit: contain (never cropped), and
+// `view` maps video pixels to screen pixels.
+const view = { width: 0, height: 0, scale: 1, offsetX: 0, offsetY: 0 };
+let scannerFor = '';
+
+function layoutOverlay() {
+  const dpr = window.devicePixelRatio || 1;
+  view.width = window.innerWidth;
+  view.height = window.innerHeight;
+  overlay.width = Math.round(view.width * dpr);
+  overlay.height = Math.round(view.height * dpr);
+  overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const vw = video.videoWidth || 1;
+  const vh = video.videoHeight || 1;
+  view.scale = Math.min(view.width / vw, view.height / vh);
+  view.offsetX = (view.width - vw * view.scale) / 2;
+  view.offsetY = (view.height - vh * view.scale) / 2;
+}
+
+function toScreen(point) {
+  const x = mirrored ? video.videoWidth - point.x : point.x;
+  return { x: view.offsetX + x * view.scale, y: view.offsetY + point.y * view.scale };
+}
+
+window.addEventListener('resize', layoutOverlay);
+
 video.addEventListener('loadedmetadata', () => {
-  overlay.width = video.videoWidth;
-  overlay.height = video.videoHeight;
-
-  setUpScanner(video.videoWidth, video.videoHeight);
-
   if (!ticking) {
     ticking = true;
     requestAnimationFrame(tick);
@@ -167,16 +223,25 @@ video.addEventListener('loadedmetadata', () => {
 
 function tick() {
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    // Set up again whenever the video size changes (e.g. phone rotated).
+    const sizeKey = `${video.videoWidth}x${video.videoHeight}`;
+    if (sizeKey !== scannerFor) {
+      scannerFor = sizeKey;
+      setUpScanner(video.videoWidth, video.videoHeight);
+      layoutOverlay();
+      seen.clear();
+    }
     const now = performance.now();
 
     for (const qr of scanForQRCodes(now)) {
-      const center = centerOf(qr.location);
-      // The video is shown mirrored (like a mirror), so flip x to match
-      // what you see — your left is the screen's left.
-      if (MIRROR_VIDEO) {
-        center.x = overlay.width - center.x;
-      }
-      seen.set(qr.data, { qr, center, raw: qr.raw, lastSeen: now });
+      const { topLeftCorner: tl, topRightCorner: tr } = qr.location;
+      seen.set(qr.data, {
+        qr,
+        center: centerOf(qr.location), // video pixels, not mirrored
+        size: Math.hypot(tr.x - tl.x, tr.y - tl.y),
+        raw: qr.raw,
+        lastSeen: now,
+      });
     }
     const visible = visibleByRole(now);
 
@@ -188,12 +253,12 @@ function tick() {
       pendingPair = null;
     }
 
-    overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+    overlayCtx.clearRect(0, 0, view.width, view.height);
     if (connection) {
       drawConnection(connection);
     }
     drawPlaceTags(visible);
-    drawHud(visible, connection, route);
+    updateHud(visible, connection, route);
     updatePopup(connection, route, now);
   }
 
@@ -201,12 +266,15 @@ function tick() {
 }
 
 // role -> center point, for every mapped code seen recently.
+// role -> { x, y, size } in screen pixels, for every mapped code seen
+// recently. x is mirrored to match the picture, so screen-left is your left.
 function visibleByRole(now) {
   const visible = new Map();
   for (const [data, entry] of seen) {
     const role = QR_ROLES[data];
     if (role && now - entry.lastSeen < VISIBLE_GRACE_MS) {
-      visible.set(role, entry.center);
+      const p = toScreen(entry.center);
+      visible.set(role, { x: p.x, y: p.y, size: entry.size * view.scale });
     }
   }
   return visible;
@@ -521,8 +589,10 @@ function recommend(results) {
 // ---------------------------------------------------------------------------
 // Drawing
 
+// Base text size in screen pixels: ~14px on a phone, up to 20px on a big
+// screen.
 function unit() {
-  return Math.max(14, overlay.width * 0.014);
+  return Math.max(13, Math.min(20, Math.min(view.width, view.height) * 0.024));
 }
 
 function drawPlaceTags(visible) {
@@ -543,16 +613,18 @@ function drawPlaceTags(visible) {
     } else {
       continue;
     }
-    drawPill(text, point.x, point.y - QR_SIZE * 0.75, color, u * 1.4);
+    // Above the code, but kept inside the screen.
+    const y = Math.max(u * 1.4, point.y - point.size * 0.5 - u * 1.6);
+    drawPill(text, point.x, y, color, u);
   }
 }
 
 function drawConnection({ from, to, transport }) {
   const u = unit();
   overlayCtx.save();
-  overlayCtx.lineWidth = u * 0.5;
+  overlayCtx.lineWidth = u * 0.35;
   overlayCtx.lineCap = 'round';
-  overlayCtx.setLineDash([u * 1.2, u * 0.9]);
+  overlayCtx.setLineDash([u * 0.9, u * 0.7]);
   overlayCtx.strokeStyle = 'rgba(255,255,255,0.9)';
 
   // Curve that passes through the transport code.
@@ -563,11 +635,12 @@ function drawConnection({ from, to, transport }) {
   overlayCtx.quadraticCurveTo(cx, cy, to.point.x, to.point.y);
   overlayCtx.stroke();
 
-  // Arrowhead at the destination, pointing along the curve.
+  // Arrowhead at the edge of the destination code, pointing along the curve.
   const angle = Math.atan2(to.point.y - cy, to.point.x - cx);
-  const tipX = to.point.x - Math.cos(angle) * QR_SIZE * 0.6;
-  const tipY = to.point.y - Math.sin(angle) * QR_SIZE * 0.6;
-  const size = u * 2;
+  const back = to.point.size * 0.6;
+  const tipX = to.point.x - Math.cos(angle) * back;
+  const tipY = to.point.y - Math.sin(angle) * back;
+  const size = u * 1.3;
   overlayCtx.setLineDash([]);
   overlayCtx.fillStyle = '#ffffff';
   overlayCtx.beginPath();
@@ -579,44 +652,36 @@ function drawConnection({ from, to, transport }) {
   overlayCtx.restore();
 }
 
-function drawHud(visible, connection, route) {
-  const u = unit();
-  const pad = u;
+// The preference pill and the hint are HTML (see index.html), so they wrap,
+// respect the iPhone notch, and can be tapped.
+const prefButton = document.getElementById('pref-button');
+const hintEl = document.getElementById('hint');
+
+prefButton.addEventListener('click', () => {
+  preferenceIndex = (preferenceIndex + 1) % PREFERENCES.length;
+  announce('preference');
+});
+
+function updateHud(visible, connection, route) {
   const p = PREFERENCES[preferenceIndex];
+  const prefText = `${p.icon} ${p.label}`;
+  if (prefButton.dataset.text !== prefText) {
+    prefButton.dataset.text = prefText;
+    prefButton.textContent = prefText;
+  }
 
-  overlayCtx.save();
-  overlayCtx.textBaseline = 'top';
-  overlayCtx.font = `600 ${u * 1.3}px system-ui, sans-serif`;
-  const hudText = `Prefer: ${p.icon} ${p.label}`;
-  drawPanel(pad, pad, overlayCtx.measureText(hudText).width + pad * 1.6, u * 2.6, 0.55);
-  overlayCtx.fillStyle = '#c6ff8a';
-  overlayCtx.fillText(hudText, pad * 1.8, pad * 1.6);
-  overlayCtx.restore();
-
+  let hint = '';
   if (!connection) {
-    const hint = !visible.has('transport')
+    hint = !visible.has('transport')
       ? 'Hold the 🧭 transport code between two places'
       : 'Show two place codes next to 🧭 transport';
-    drawBanner(hint);
   } else if (route.status !== 'done') {
-    drawBanner('Finding routes…');
+    hint = 'Finding routes…';
   }
-}
-
-function drawBanner(text) {
-  const u = unit();
-  overlayCtx.save();
-  overlayCtx.font = `500 ${u * 1.5}px system-ui, sans-serif`;
-  const w = overlayCtx.measureText(text).width + u * 3;
-  const h = u * 3;
-  const x = (overlay.width - w) / 2;
-  const y = overlay.height - h - u * 2;
-  drawPanel(x, y, w, h, 0.6);
-  overlayCtx.fillStyle = '#fff';
-  overlayCtx.textBaseline = 'middle';
-  overlayCtx.textAlign = 'center';
-  overlayCtx.fillText(text, overlay.width / 2, y + h / 2);
-  overlayCtx.restore();
+  if (hintEl.textContent !== hint) {
+    hintEl.textContent = hint;
+  }
+  hintEl.hidden = !hint;
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +937,8 @@ function drawPill(text, cx, cy, color, size) {
   overlayCtx.font = `700 ${size}px system-ui, sans-serif`;
   const w = overlayCtx.measureText(text).width + size * 1.2;
   const h = size * 1.8;
+  // Keep the pill on screen.
+  cx = Math.max(w / 2 + 4, Math.min(view.width - w / 2 - 4, cx));
   overlayCtx.fillStyle = 'rgba(0,0,0,0.65)';
   roundRect(cx - w / 2, cy - h / 2, w, h, h / 2);
   overlayCtx.fill();
@@ -883,12 +950,6 @@ function drawPill(text, cx, cy, color, size) {
   overlayCtx.textBaseline = 'middle';
   overlayCtx.fillText(text, cx, cy + size * 0.05);
   overlayCtx.restore();
-}
-
-function drawPanel(x, y, w, h, alpha) {
-  overlayCtx.fillStyle = `rgba(0,0,0,${alpha})`;
-  roundRect(x, y, w, h, unit() * 0.8);
-  overlayCtx.fill();
 }
 
 function roundRect(x, y, w, h, r) {
@@ -918,7 +979,7 @@ let frameCount = 0;
 let tileBuffer = new Uint8ClampedArray(0);
 
 function setUpScanner(videoWidth, videoHeight) {
-  scanScale = Math.min(1, SCAN_MAX_WIDTH / videoWidth);
+  scanScale = Math.min(1, SCAN_MAX_WIDTH / Math.max(videoWidth, videoHeight));
   sampleCanvas = document.createElement('canvas');
   sampleCanvas.width = Math.round(videoWidth * scanScale);
   sampleCanvas.height = Math.round(videoHeight * scanScale);
